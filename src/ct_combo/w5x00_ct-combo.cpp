@@ -139,7 +139,7 @@ struct ConfigData {
 };
 
 /* Initialize */
-int32_t retval = 0;
+int32_t ethRetVal = DHCP_FAILED;
 uint32_t start_ms = 0;
 uint32_t end_ms = 0;
 bool initDone = false;
@@ -205,10 +205,10 @@ int main()
     set_clock_khz();
     stdio_init_all();
 
+    sleep_ms(2000);
     log("Info", "Setup start");
 
-    watchdog_enable(50000, false);
-    sleep_ms(3000);
+    watchdog_enable(20000, false);
 
     // Read config from Flash
     ConfigData loaded = read_from_flash();
@@ -289,9 +289,12 @@ int main()
     {
         watchdog_update();
 
-        if (g_mqtt_client.isconnected)
+        if (ethRetVal == DHCP_IP_LEASED)
         {
-            log("Info", "MQTT loop");
+            if (g_mqtt_client.isconnected)
+            {
+            // log("Info", "MQTT loop");
+            networkRecoveryCounter = 0;
             if (!initDone)
             {
                 auto initRet = sendMqtt(willTopic, willMessageOn, true);
@@ -299,9 +302,9 @@ int main()
             }
 
             bool result = true;
-            if ((retval = MQTTYield(&g_mqtt_client, g_mqtt_packet_connect_data.keepAliveInterval)) < 0)
+            if (MQTTYield(&g_mqtt_client, g_mqtt_packet_connect_data.keepAliveInterval) < 0)
             {
-                log("MQTT", "Yield error: ");// + retval);
+                log("MQTT", "Yield error: ");
                 result = false;
             }
 
@@ -321,18 +324,26 @@ int main()
             {
                 g_mqtt_client.isconnected = 0;
             }
-        }
-
-        if (retval != DHCP_IP_LEASED)
+            }
+            else
+            {
+            log("Info", "MQTT reconnect");
+            sleep_ms(500);
+            mqttConnect();
+            initDone = false;
+            networkRecoveryCounter++;
+            }
+        } 
+        else
         {
             log("Info", "Network reconnect loop");
 
             /* Assigned IP through DHCP */
             if (g_net_info.dhcp == NETINFO_DHCP)
             {
-                retval = DHCP_run();
+                ethRetVal = DHCP_run();
 
-                if (retval == DHCP_IP_LEASED)
+                if (ethRetVal == DHCP_IP_LEASED)
                 {
                     if (g_dhcp_get_ip_flag == 0)
                     {
@@ -342,7 +353,7 @@ int main()
                         networkRecoveryCounter = 0;
                     }
                 }
-                else if (retval == DHCP_FAILED)
+                else if (ethRetVal == DHCP_FAILED)
                 {
                     g_dhcp_get_ip_flag = 0;
                     dhcp_retry++;
@@ -374,12 +385,6 @@ int main()
                 networkRecoveryCounter++;
             }
         }
-        else if (!g_mqtt_client.isconnected)
-        {
-            log("Info", "MQTT reconnect");
-            mqttConnect();
-            initDone = false;
-        }
 
         if (networkRecoveryCounter > NETWORK_RECOVERY_THRESHOLD)
         {
@@ -393,7 +398,7 @@ void core1_entry()
 {
     while (1)
     {
-        if(retval != DHCP_IP_LEASED)
+        if(ethRetVal != DHCP_IP_LEASED)
             continue;
 
         /* Run HTTP server */
@@ -521,11 +526,14 @@ void processPIR(PIR& pir, bool state)
         string mqttState = state ? "HIGH" : "LOW";
         log("PIR", pir.topicStat);
         log("PIR", state);
-        auto result = sendMqtt(pir.topicStat, mqttState);
-        if (result)
+        if (g_mqtt_client.isconnected)
         {
-            pir.lastReportedValue = pir.measuredValue;
-            pir.initDone = true;
+            auto result = sendMqtt(pir.topicStat, mqttState);
+            if (result)
+            {
+                pir.lastReportedValue = pir.measuredValue;
+                pir.initDone = true;
+            }
         }
     }
 }
@@ -540,11 +548,14 @@ void processADC(ADCchannel& channel)
         log("ADC", channel.topicStat);
         log("ADC", channel.lastReportedValue);
         log("ADC", channel.measuredValue);
-        auto result = sendMqtt(channel.topicStat, channel.measuredValue);
-        if (result)
+        if (g_mqtt_client.isconnected)
         {
-            channel.lastReportedValue = channel.measuredValue;
-            channel.initDone = true;
+            auto result = sendMqtt(channel.topicStat, channel.measuredValue);
+            if (result)
+            {
+                channel.lastReportedValue = channel.measuredValue;
+                channel.initDone = true;
+            }
         }
     }
 }
@@ -566,6 +577,8 @@ void networkConfig()
     wizchip_reset();
     wizchip_initialize();
     wizchip_check();
+
+    wizchip_delay_ms(2000);
 
     wizchip_1ms_timer_initialize(repeating_timer_callback);
 

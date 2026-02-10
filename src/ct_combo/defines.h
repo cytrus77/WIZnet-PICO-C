@@ -29,7 +29,7 @@ using namespace std;
 
 /* Timeout */
 #define DEFAULT_TIMEOUT 1000 // 1 second
-#define NETWORK_RECOVERY_THRESHOLD 100
+#define NETWORK_RECOVERY_THRESHOLD 20
 
 // TimerOne configLed
 const unsigned long CYCLES_PER_SECOND = 8000;
